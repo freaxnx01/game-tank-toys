@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tank Toys — Isometric Tank Battle</title>
+  <meta name="description" content="Two-player isometric toy-tank battle. Peer-to-peer over WebRTC with copy-paste connection codes — no server needed.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #7fb56b; overflow: hidden; }
+    a { color: #1d5c2e; }
+    a:hover { color: #0f3f1d; }
+    tank-game { position: fixed; inset: 0; }
+  </style>
+  <script src="./tank-game.js" defer></script>
+</head>
+<body>
+  <tank-game map-size="20" win-score="5"></tank-game>
+</body>
+</html>

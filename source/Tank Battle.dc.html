@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <title>Tank Toys — Isometric Tank Battle</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #7fb56b; overflow: hidden; }
+    a { color: #1d5c2e; }
+    a:hover { color: #0f3f1d; }
+  </style>
+</helmet>
+<div style="position: fixed; inset: 0; background: #7fb56b;">
+  <x-import component-from-global-scope="tank-game" from="./tank-game.js" map-size="{{ mapSize }}" win-score="{{ winScore }}" hint-size="100%,100%"></x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;mapSize&quot;: { &quot;editor&quot;: &quot;range&quot;, &quot;default&quot;: 20, &quot;min&quot;: 12, &quot;max&quot;: 40, &quot;step&quot;: 2, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Battlefield&quot;, &quot;unit&quot;: &quot;tiles&quot; },
+  &quot;winScore&quot;: { &quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 5, &quot;min&quot;: 1, &quot;max&quot;: 20, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Rules&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      mapSize: String(this.props.mapSize ?? 20),
+      winScore: String(this.props.winScore ?? 5)
+    };
+  }
+}
+</script>
+</body>
+</html>
