@@ -765,6 +765,22 @@
     }
 
     /* ----- rendering ----- */
+    // Painter's-algorithm depth band for an entity. Height-aware so a tank on
+    // flat/low ground isn't wrongly clipped by the tile row in front of it,
+    // while terrain that is genuinely taller in front still occludes it — so
+    // hills keep working as cover. Out-of-range tiles read as 99 (a wall), so
+    // entities never get pushed in front of the map edge. (#2)
+    _depthBand(x, y, eh) {
+      const fx = Math.floor(x), fy = Math.floor(y);
+      const base = fx + fy;
+      const hF = Math.max(
+        mapH(this.map, fx + 1, fy),
+        mapH(this.map, fx, fy + 1),
+        mapH(this.map, fx + 1, fy + 1)
+      );
+      return base + (hF <= eh + 0.05 ? 1 : 0);
+    }
+
     _render() {
       const cv = this.canvas, dpr = Math.min(2, window.devicePixelRatio || 1);
       const W = this.clientWidth || 800, H = this.clientHeight || 600;
@@ -799,18 +815,19 @@
       ctx.fill();
       ctx.restore();
 
-      // collect entities keyed by depth row
+      // collect entities keyed by depth row (height-aware, see _depthBand — #2)
       const ents = [];
+      const db = (x, y, h) => this._depthBand(x, y, h);
       for (let ty = 0; ty < N; ty++) for (let tx = 0; tx < N; tx++) {
         const ob = this.map.obst[ty * N + tx];
-        if (ob) ents.push({ d: tx + ty, z: tx + ty, kind: 'ob', tx, ty, ob });
+        if (ob) ents.push({ d: db(tx + 0.5, ty + 0.5, this.map.h[ty * N + tx]), z: tx + ty, kind: 'ob', tx, ty, ob });
       }
       if (this.state === 'play' || this.state === 'over') {
-        for (const t of this.tanks) if (t.alive) ents.push({ d: Math.floor(t.x) + Math.floor(t.y), z: t.x + t.y, kind: 'tank', t });
+        for (const t of this.tanks) if (t.alive) ents.push({ d: db(t.x, t.y, t.vh), z: t.x + t.y, kind: 'tank', t });
       }
-      for (const b of this.bullets) ents.push({ d: Math.floor(b.x) + Math.floor(b.y), z: b.x + b.y, kind: 'bullet', b });
-      for (const p of this.pus) ents.push({ d: Math.floor(p.x) + Math.floor(p.y), z: p.x + p.y, kind: 'pu', p });
-      for (const p of this.parts) ents.push({ d: Math.floor(p.x) + Math.floor(p.y), z: p.x + p.y, kind: 'part', p });
+      for (const b of this.bullets) ents.push({ d: db(b.x, b.y, b.h), z: b.x + b.y, kind: 'bullet', b });
+      for (const p of this.pus) ents.push({ d: db(p.x, p.y, mapH(this.map, Math.floor(p.x), Math.floor(p.y))), z: p.x + p.y, kind: 'pu', p });
+      for (const p of this.parts) ents.push({ d: db(p.x, p.y, p.h), z: p.x + p.y, kind: 'part', p });
       ents.sort((a, b2) => a.d - b2.d || a.z - b2.z);
       let ei = 0;
 
