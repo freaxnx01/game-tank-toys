@@ -170,8 +170,8 @@
     return map.obst[ty * map.N + tx];
   }
 
-  const PU_KINDS = ['speed', 'shield', 'rapid'];
-  const PU_COLOR = { speed: '#f5a623', shield: '#37c8e0', rapid: '#e84fa0' };
+  const PU_KINDS = ['speed', 'shield', 'rapid', 'missile'];
+  const PU_COLOR = { speed: '#f5a623', shield: '#37c8e0', rapid: '#e84fa0', missile: '#b06bff' };
 
   /* ---------- component ---------- */
   class TankGame extends HTMLElement {
@@ -454,13 +454,14 @@
           if (!rt) break;
           rt.net = { x: m.x, y: m.y, a: m.a };
           rt.hp = m.hp; rt.score = m.sc; rt.inv = m.inv; rt.shield = m.sh;
+          if (typeof m.mi === 'number') rt.missiles = m.mi;
           if (rt.alive && !m.al) this._explodeTank(rt);
           rt.alive = m.al;
           this._checkWin();
           break;
         case 'f':
-          this.bullets.push({ x: m.x, y: m.y, dx: m.dx, dy: m.dy, h: m.h, owner: 1 - this.myIdx, life: 3 });
-          this.sfx.shoot();
+          this.bullets.push({ x: m.x, y: m.y, dx: m.dx, dy: m.dy, h: m.h, owner: 1 - this.myIdx, life: m.g ? 4.5 : 3, guided: !!m.g, target: m.g ? this.myIdx : -1 });
+          if (m.g) this.sfx.blip(220, 520, 0.18, 'sawtooth', 0.1); else this.sfx.shoot();
           break;
         case 'd':
           if (this.tanks[this.myIdx]) { this.tanks[this.myIdx].score++; this._checkWin(); }
@@ -483,7 +484,7 @@
       const mk = (i) => {
         const s = this.map.spawns[i];
         const a = Math.atan2(this.map.N / 2 - s.y, this.map.N / 2 - s.x);
-        return { i, x: s.x, y: s.y, a, hp: 5, alive: true, respawn: 0, inv: 2, cool: 0, score: 0, vh: 0, shield: 0, speed: 0, rapid: 0, net: null, anim: 0 };
+        return { i, x: s.x, y: s.y, a, hp: 5, alive: true, respawn: 0, inv: 2, cool: 0, score: 0, vh: 0, shield: 0, speed: 0, rapid: 0, missiles: 0, net: null, anim: 0 };
       };
       this.tanks = [mk(0), mk(1)];
       this.state = 'play';
@@ -559,12 +560,19 @@
         if (okY) t.y = Math.max(0.4, Math.min(this.map.N - 0.4, ny));
       }
       if (c.fire && t.cool <= 0 && t.alive) {
-        t.cool = t.rapid > 0 ? 0.18 : 0.55;
+        const guided = t.missiles > 0;                         // fire a homing missile while ammo lasts
+        t.cool = guided ? 0.7 : (t.rapid > 0 ? 0.18 : 0.55);
         const h = mapH(this.map, Math.floor(t.x), Math.floor(t.y)) + 0.7;
-        const b = { x: t.x + Math.cos(t.a) * 0.5, y: t.y + Math.sin(t.a) * 0.5, dx: Math.cos(t.a) * 8.5, dy: Math.sin(t.a) * 8.5, h, owner: t.i, life: 3 };
+        const spd = guided ? 6 : 8.5;
+        const b = {
+          x: t.x + Math.cos(t.a) * 0.5, y: t.y + Math.sin(t.a) * 0.5,
+          dx: Math.cos(t.a) * spd, dy: Math.sin(t.a) * spd,
+          h, owner: t.i, life: guided ? 4.5 : 3,
+          guided, target: guided ? 1 - t.i : -1
+        };
         this.bullets.push(b);
-        this.sfx.shoot();
-        if (this.mode === 'net') this.net.send({ t: 'f', x: b.x, y: b.y, dx: b.dx, dy: b.dy, h: b.h });
+        if (guided) { t.missiles--; this.sfx.blip(220, 520, 0.18, 'sawtooth', 0.1); } else this.sfx.shoot();
+        if (this.mode === 'net') this.net.send({ t: 'f', x: b.x, y: b.y, dx: b.dx, dy: b.dy, h: b.h, g: guided ? 1 : 0 });
       }
     }
 
@@ -614,7 +622,7 @@
       t.x = s.x; t.y = s.y;
       t.a = Math.atan2(this.map.N / 2 - s.y, this.map.N / 2 - s.x);
       t.hp = 5; t.alive = true; t.inv = 2.2;
-      t.shield = 0; t.speed = 0; t.rapid = 0;
+      t.shield = 0; t.speed = 0; t.rapid = 0; t.missiles = 0;
     }
 
     _spawnPu() {
@@ -623,7 +631,7 @@
         const y = 1 + Math.floor(Math.random() * (this.map.N - 2));
         if (mapOb(this.map, x, y)) continue;
         if (this.map.spawns.some(s => Math.hypot(x + 0.5 - s.x, y + 0.5 - s.y) < 3)) continue;
-        const pu = { id: this.puId++, x: x + 0.5, y: y + 0.5, k: PU_KINDS[(Math.random() * 3) | 0] };
+        const pu = { id: this.puId++, x: x + 0.5, y: y + 0.5, k: PU_KINDS[(Math.random() * PU_KINDS.length) | 0] };
         this.pus.push(pu);
         if (this.mode === 'net') this.net.send({ t: 'pu', id: pu.id, x: pu.x, y: pu.y, k: pu.k });
         return;
@@ -659,8 +667,31 @@
       /* bullets */
       for (let i = this.bullets.length - 1; i >= 0; i--) {
         const b = this.bullets[i];
+        if (b.guided) {
+          // Homing: steer toward the target tank at a balanced turn rate. Each
+          // peer simulates the missile toward its own copy of the target, and
+          // the target peer stays authoritative over its own damage.
+          const tgt = this.tanks[b.target];
+          if (tgt && tgt.alive) {
+            const desired = Math.atan2(tgt.y - b.y, tgt.x - b.x);
+            let cur = Math.atan2(b.dy, b.dx), da = desired - cur;
+            while (da > Math.PI) da -= Math.PI * 2;
+            while (da < -Math.PI) da += Math.PI * 2;
+            const maxTurn = 2.6 * dt;
+            da = da > maxTurn ? maxTurn : da < -maxTurn ? -maxTurn : da;
+            cur += da;
+            const sp = Math.hypot(b.dx, b.dy) || 6;
+            b.dx = Math.cos(cur) * sp; b.dy = Math.sin(cur) * sp;
+            // ease height toward the target's ground so it can strike home
+            const tgtH = mapH(this.map, Math.floor(tgt.x), Math.floor(tgt.y)) + 0.5;
+            const dh = tgtH - b.h, mh = 2.5 * dt;
+            b.h += dh > mh ? mh : dh < -mh ? -mh : dh;
+          }
+          b.tr = (b.tr || 0) - dt;
+          if (b.tr <= 0) { b.tr = 0.045; this._spark(b.x, b.y, b.h, '#e8a15a'); }  // smoke trail
+        }
         b.x += b.dx * dt; b.y += b.dy * dt;
-        b.h -= 0.55 * dt;   // gentle drop so hill-top shots reach the valley
+        if (!b.guided) b.h -= 0.55 * dt;   // gentle drop so hill-top shots reach the valley
         b.life -= dt;
         let dead = b.life <= 0 || b.x < 0 || b.y < 0 || b.x >= this.map.N || b.y >= this.map.N;
         if (!dead) {
@@ -708,8 +739,9 @@
             if (p.k === 'speed') t.speed = 8;
             if (p.k === 'shield') t.shield = 6;
             if (p.k === 'rapid') t.rapid = 8;
+            if (p.k === 'missile') t.missiles = 3;
             this.sfx.pick();
-            this._toast((idx === 0 ? 'Red' : 'Blue') + ' got ' + (p.k === 'speed' ? 'Speed!' : p.k === 'shield' ? 'Shield!' : 'Rapid fire!'));
+            this._toast((idx === 0 ? 'Red' : 'Blue') + ' got ' + (p.k === 'speed' ? 'Speed!' : p.k === 'shield' ? 'Shield!' : p.k === 'rapid' ? 'Rapid fire!' : 'Guided Missiles!'));
             this.pus.splice(i, 1);
             if (this.mode === 'net') this.net.send({ t: 'pug', id: p.id });
             break;
@@ -725,7 +757,7 @@
         if (this.sendT <= 0) {
           this.sendT = 1 / 15;
           const t = this.tanks[this.myIdx];
-          this.net.send({ t: 's', x: +t.x.toFixed(3), y: +t.y.toFixed(3), a: +t.a.toFixed(3), hp: t.hp, al: t.alive, sc: t.score, inv: t.inv, sh: t.shield });
+          this.net.send({ t: 's', x: +t.x.toFixed(3), y: +t.y.toFixed(3), a: +t.a.toFixed(3), hp: t.hp, al: t.alive, sc: t.score, inv: t.inv, sh: t.shield, mi: t.missiles });
         }
       }
 
@@ -757,6 +789,7 @@
         if (t.speed > 0) buffs.push(['SPEED', PU_COLOR.speed]);
         if (t.shield > 0) buffs.push(['SHIELD', PU_COLOR.shield]);
         if (t.rapid > 0) buffs.push(['RAPID', PU_COLOR.rapid]);
+        if (t.missiles > 0) buffs.push(['MISSILE ×' + t.missiles, PU_COLOR.missile]);
         if (!t.alive) buffs.push(['REBUILDING…', '#8a7f5c']);
         const bhtml = buffs.map(b => `<span class="buff" style="background:${b[1]}">${b[0]}</span>`).join('');
         const bel = card.querySelector('.buffs');
@@ -1026,8 +1059,28 @@
 
     _drawBullet(ctx, iso, b) {
       const [px, py] = iso(b.x, b.y, 0);
-      this._shadow(ctx, px, py, 5);
+      this._shadow(ctx, px, py, b.guided ? 6 : 5);
       const [bx, by] = iso(b.x, b.y, b.h);
+      if (b.guided) {
+        // little homing rocket pointing along its screen-space travel
+        const ang = Math.atan2((b.dx + b.dy) * 0.5, b.dx - b.dy);
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(ang);
+        ctx.fillStyle = 'rgba(255,170,60,0.9)';   // exhaust flame
+        ctx.beginPath();
+        ctx.moveTo(-6, 0); ctx.lineTo(-13 - Math.random() * 3, -2.4); ctx.lineTo(-13 - Math.random() * 3, 2.4);
+        ctx.closePath(); ctx.fill();
+        const bg = ctx.createLinearGradient(-6, 0, 8, 0);
+        bg.addColorStop(0, b.owner === 0 ? '#b03225' : '#2757a0');
+        bg.addColorStop(1, '#efe6ff');
+        ctx.fillStyle = bg;
+        this._rr(ctx, -6, -3.2, 15, 6.4, 3.2); ctx.fill();
+        ctx.fillStyle = '#b06bff';                 // nose
+        ctx.beginPath(); ctx.arc(8, 0, 3.4, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+        return;
+      }
       const grad = ctx.createRadialGradient(bx - 1.5, by - 1.5, 0.5, bx, by, 6);
       grad.addColorStop(0, '#fff3c4');
       grad.addColorStop(1, b.owner === 0 ? '#e8632f' : '#3a7bd5');
@@ -1058,6 +1111,11 @@
         ctx.stroke();
       } else if (p.k === 'shield') {  // ring
         ctx.beginPath(); ctx.arc(px, cy, 5.5, 0, Math.PI * 2); ctx.stroke();
+      } else if (p.k === 'missile') { // little rocket
+        ctx.beginPath();
+        ctx.moveTo(px, cy - 6); ctx.lineTo(px + 3.6, cy + 3); ctx.lineTo(px - 3.6, cy + 3);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(px, cy + 3); ctx.lineTo(px, cy + 6.5); ctx.stroke();
       } else {                        // rapid: three dots
         for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.arc(px + i * 5.5, cy, 2.2, 0, Math.PI * 2); ctx.fill(); }
       }
