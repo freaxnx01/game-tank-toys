@@ -269,6 +269,8 @@
   .rowbtns{display:flex;gap:10px}
   .rowbtns .btn{flex:1}
   .bigwin{font-size:38px;font-weight:900;margin:0 0 6px}
+  .winscore{font-size:22px;font-weight:900;color:#2c4022;margin:2px 0 16px;letter-spacing:.3px}
+  .winscore .r{color:#e84c3d}.winscore .b{color:#3a7bd5}
 </style>
 <canvas></canvas>
 <div class="hud">
@@ -319,6 +321,7 @@
 
 <div class="screen" id="scr-over"><div class="card">
   <div class="bigwin" id="win-title">Red wins!</div>
+  <div class="winscore" id="win-score"></div>
   <p id="win-sub"></p>
   <div class="rowbtns">
     <button class="btn" id="b-rematch">Rematch</button>
@@ -499,14 +502,23 @@
       const w = this.tanks.findIndex(t => t.score >= this.winScore);
       if (w < 0) return;
       this.state = 'over';
+      this._updateHud();                 // freeze the corner HUD on the true final score
       this._show('over');
       this.$('.hud').classList.add('on');
       const names = ['Red', 'Blue'], colors = ['#e84c3d', '#3a7bd5'];
       const el = this.$('#win-title');
-      el.textContent = names[w] + ' wins!';
-      el.style.color = colors[w];
-      const mine = this.mode === 'net' ? (w === this.myIdx ? 'You take the battlefield!' : 'Better luck next round.') : '';
-      this.$('#win-sub').textContent = mine || (this.tanks[0].score + ' – ' + this.tanks[1].score);
+      if (this.mode === 'net') {
+        const iWon = w === this.myIdx;
+        el.textContent = iWon ? 'You win!' : 'You lose';
+        el.style.color = iWon ? colors[this.myIdx] : '#8a7f5c';
+        this.$('#win-sub').textContent = iWon ? 'You take the battlefield!' : 'Better luck next round.';
+      } else {
+        el.textContent = names[w] + ' wins!';
+        el.style.color = colors[w];
+        this.$('#win-sub').textContent = 'Great match!';
+      }
+      // Score is shown identically on both peers' end screens.
+      this.$('#win-score').innerHTML = '<span class="r">Red ' + this.tanks[0].score + '</span> — <span class="b">' + this.tanks[1].score + ' Blue</span>';
       this.sfx.win();
     }
 
@@ -587,11 +599,13 @@
         t.alive = false;
         t.respawn = 2.4;
         this._explodeTank(t);
+        // Credit the kill to the other tank locally on BOTH peers so the losing
+        // peer also detects game-over (the winner stops syncing once it hits
+        // 'over', so the loser can't rely on a score sync arriving). The killer's
+        // authoritative score sync SETS the same value, so this never double-counts.
+        this.tanks[1 - t.i].score++;
         if (this.mode === 'net') this.net.send({ t: 'd' });
-        else {
-          this.tanks[1 - t.i].score++;
-          this._checkWin();
-        }
+        this._checkWin();
       }
     }
 
