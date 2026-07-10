@@ -467,6 +467,11 @@
           if (this.tanks[this.myIdx]) { this.tanks[this.myIdx].score++; this._checkWin(); }
           break;
         case 'ob': this._destroyObstacle(m.x, m.y, false); break;
+        case 'tf':
+          if (Array.isArray(m.c)) for (const c of m.c) {
+            if (c.x >= 0 && c.y >= 0 && c.x < this.map.N && c.y < this.map.N) this.map.h[c.y * this.map.N + c.x] = c.h;
+          }
+          break;
         case 'pu': this.pus.push({ id: m.id, x: m.x, y: m.y, k: m.k }); break;
         case 'pug': {
           const i = this.pus.findIndex(p => p.id === m.id);
@@ -585,6 +590,29 @@
       for (let i = 0; i < 14; i++) this._spark(tx + 0.5, ty + 0.5, h + 0.5, col);
       this.sfx.thunk();
       if (broadcast && this.mode === 'net') this.net.send({ t: 'ob', x: tx, y: ty });
+    }
+
+    // Weapon impacts erode raised terrain — lowering hills flattens cover and
+    // changes movement/line-of-sight. Deterministic (no RNG on the heights):
+    // the owner peer lowers + broadcasts the resulting absolute heights, and
+    // the other peer just SETS them (idempotent), so both stay in sync. #4
+    _terraform(tx, ty, power, broadcast) {
+      const N = this.map.N, changes = [];
+      const lower = (x, y, amt) => {
+        if (x < 0 || y < 0 || x >= N || y >= N) return;
+        const idx = y * N + x, nh = Math.max(0, this.map.h[idx] - amt);
+        if (nh !== this.map.h[idx]) {
+          this.map.h[idx] = nh;
+          changes.push({ x, y, h: nh });
+          this._spark(x + 0.5, y + 0.5, nh + 0.6, '#7a5a34');   // kicked-up soil
+        }
+      };
+      lower(tx, ty, power);
+      if (power >= 2) { lower(tx + 1, ty, 1); lower(tx - 1, ty, 1); lower(tx, ty + 1, 1); lower(tx, ty - 1, 1); }
+      if (changes.length) {
+        this.sfx.thunk();
+        if (broadcast && this.mode === 'net') this.net.send({ t: 'tf', c: changes });
+      }
     }
 
     _spark(x, y, h, color) {
@@ -706,7 +734,10 @@
             } else { this._spark(b.x, b.y, b.h, '#9aa0a6'); }
           } else if (mapH(this.map, tx, ty) > b.h) {
             dead = true;
-            for (let s = 0; s < 5; s++) this._spark(b.x, b.y, mapH(this.map, tx, ty), '#7cba58');
+            const gh = mapH(this.map, tx, ty);
+            for (let s = 0; s < 5; s++) this._spark(b.x, b.y, gh, '#7cba58');
+            // erode the terrain the shot slams into (owner-authoritative in P2P)
+            if (localIdxs.includes(b.owner)) this._terraform(tx, ty, b.guided ? 2 : 1, true);
           }
         }
         if (!dead) {
