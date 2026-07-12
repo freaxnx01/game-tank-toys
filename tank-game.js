@@ -147,7 +147,7 @@
       const x = 1 + Math.floor(rnd() * (N - 2)), y = 1 + Math.floor(rnd() * (N - 2));
       if (obst[y * N + x]) continue;
       const r = rnd();
-      obst[y * N + x] = r < 0.45 ? { k: 'tree', hp: 2 } : r < 0.8 ? { k: 'crate', hp: 1 } : { k: 'rock', hp: 1e9 };
+      obst[y * N + x] = r < 0.4 ? { k: 'tree', hp: 2 } : r < 0.66 ? { k: 'crate', hp: 1 } : r < 0.85 ? { k: 'barrel', hp: 1 } : { k: 'rock', hp: 1e9 };
     }
     const spawns = [{ x: 2.5, y: 2.5 }, { x: N - 2.5, y: N - 2.5 }];
     for (const s of spawns) {
@@ -172,6 +172,25 @@
 
   const PU_KINDS = ['speed', 'shield', 'rapid', 'missile'];
   const PU_COLOR = { speed: '#f5a623', shield: '#37c8e0', rapid: '#e84fa0', missile: '#b06bff' };
+  // Weapon-pack power-ups (#5). Each grants special ammo fired from the gun as a
+  // bullet flagged with `k`; the behaviour flags below are read on impact
+  // (knock/pull/stun/terra/aoe/bounce/flat/pierce). Both peers simulate every
+  // bullet and each applies hit-effects only to its OWN tank, so no extra net
+  // messages are needed beyond tagging the fire message with the weapon kind.
+  const WEAPONS = {
+    anchor:    { ammo: 4, cool: 0.85, spd: 5.5, life: 3,   dmg: 2, knock: 2.4, terra: 1, col: '#9aa1ab', big: true, label: 'Ship Anchor' },
+    harpoon:   { ammo: 5, cool: 0.5,  spd: 11,  life: 2,   dmg: 1, pull: 2.4,            col: '#c0632e',            label: 'Harpoon' },
+    crt:       { ammo: 4, cool: 0.8,  spd: 6,   life: 3,   dmg: 2, knock: 1.4, terra: 1, col: '#566371', big: true, label: 'Tube Monitor' },
+    medball:   { ammo: 5, cool: 0.5,  spd: 8,   life: 3.5, dmg: 1, bounce: 3,            col: '#c34242', big: true, label: 'Medicine Ball' },
+    dynamite:  { ammo: 3, cool: 0.9,  spd: 6,   life: 2.6, dmg: 2, terra: 3, aoe: 1.9,   col: '#e23b1e',            label: 'Dynamite' },
+    laser:     { ammo: 7, cool: 0.3,  spd: 20,  life: 1.4, dmg: 1, flat: true, pierce: true, col: '#ff3b6b', beam: true, label: 'Laser' },
+    disruptor: { ammo: 4, cool: 0.7,  spd: 8,   life: 2,   dmg: 1, stun: 2.2,            col: '#37d6e0',            label: 'Disruptor' },
+    sniper:    { ammo: 5, cool: 0.85, spd: 16,  life: 2.2, dmg: 3, flat: true,           col: '#ffd76e', beam: true, label: 'Sniper' },
+  };
+  const WEAPON_KEYS = Object.keys(WEAPONS);
+  for (const wk of WEAPON_KEYS) PU_COLOR[wk] = WEAPONS[wk].col;
+  // Power-up spawn pool: the base buffs plus the weapon pack.
+  const PU_POOL = ['speed', 'shield', 'rapid', 'missile', ...WEAPON_KEYS];
 
   /* ---------- component ---------- */
   class TankGame extends HTMLElement {
@@ -459,10 +478,15 @@
           rt.alive = m.al;
           this._checkWin();
           break;
-        case 'f':
-          this.bullets.push({ x: m.x, y: m.y, dx: m.dx, dy: m.dy, h: m.h, owner: 1 - this.myIdx, life: m.g ? 4.5 : 3, guided: !!m.g, target: m.g ? this.myIdx : -1 });
-          if (m.g) this.sfx.blip(220, 520, 0.18, 'sawtooth', 0.1); else this.sfx.shoot();
+        case 'f': {
+          const w = m.w && WEAPONS[m.w] ? WEAPONS[m.w] : null;
+          this.bullets.push({ x: m.x, y: m.y, dx: m.dx, dy: m.dy, h: m.h, owner: 1 - this.myIdx,
+            life: w ? w.life : (m.g ? 4.5 : 3), guided: !!m.g, target: m.g ? this.myIdx : -1,
+            k: w ? m.w : null, bounce: m.bn || 0 });
+          if (w) this.sfx.blip(w.beam ? 900 : 160, w.beam ? 300 : 70, 0.14, w.beam ? 'sawtooth' : 'square', 0.09);
+          else if (m.g) this.sfx.blip(220, 520, 0.18, 'sawtooth', 0.1); else this.sfx.shoot();
           break;
+        }
         case 'd':
           if (this.tanks[this.myIdx]) { this.tanks[this.myIdx].score++; this._checkWin(); }
           break;
@@ -489,7 +513,7 @@
       const mk = (i) => {
         const s = this.map.spawns[i];
         const a = Math.atan2(this.map.N / 2 - s.y, this.map.N / 2 - s.x);
-        return { i, x: s.x, y: s.y, a, hp: 5, alive: true, respawn: 0, inv: 2, cool: 0, score: 0, vh: 0, shield: 0, speed: 0, rapid: 0, missiles: 0, net: null, anim: 0 };
+        return { i, x: s.x, y: s.y, a, hp: 5, alive: true, respawn: 0, inv: 2, cool: 0, score: 0, vh: 0, shield: 0, speed: 0, rapid: 0, missiles: 0, wpn: null, wammo: 0, stun: 0, net: null, anim: 0 };
       };
       this.tanks = [mk(0), mk(1)];
       this.state = 'play';
@@ -549,6 +573,7 @@
     }
 
     _moveTank(t, c, dt) {
+      if (t.stun > 0) return;                                   // disruptor: controls locked out
       const turn = (c.r ? 1 : 0) - (c.l ? 1 : 0);
       t.a += turn * dt * 2.7;
       const thr = (c.f ? 1 : 0) - (c.b ? 0.6 : 0);
@@ -565,19 +590,41 @@
         if (okY) t.y = Math.max(0.4, Math.min(this.map.N - 0.4, ny));
       }
       if (c.fire && t.cool <= 0 && t.alive) {
-        const guided = t.missiles > 0;                         // fire a homing missile while ammo lasts
-        t.cool = guided ? 0.7 : (t.rapid > 0 ? 0.18 : 0.55);
+        const w = t.wammo > 0 ? WEAPONS[t.wpn] : null;         // equipped special weapon
+        const guided = !w && t.missiles > 0;                   // else fire a homing missile while ammo lasts
+        t.cool = w ? w.cool : guided ? 0.7 : (t.rapid > 0 ? 0.18 : 0.55);
         const h = mapH(this.map, Math.floor(t.x), Math.floor(t.y)) + 0.7;
-        const spd = guided ? 6 : 8.5;
+        const spd = w ? w.spd : guided ? 6 : 8.5;
         const b = {
           x: t.x + Math.cos(t.a) * 0.5, y: t.y + Math.sin(t.a) * 0.5,
           dx: Math.cos(t.a) * spd, dy: Math.sin(t.a) * spd,
-          h, owner: t.i, life: guided ? 4.5 : 3,
-          guided, target: guided ? 1 - t.i : -1
+          h, owner: t.i, life: w ? w.life : guided ? 4.5 : 3,
+          guided, target: guided ? 1 - t.i : -1,
+          k: w ? t.wpn : null, bounce: w ? (w.bounce || 0) : 0
         };
         this.bullets.push(b);
-        if (guided) { t.missiles--; this.sfx.blip(220, 520, 0.18, 'sawtooth', 0.1); } else this.sfx.shoot();
-        if (this.mode === 'net') this.net.send({ t: 'f', x: b.x, y: b.y, dx: b.dx, dy: b.dy, h: b.h, g: guided ? 1 : 0 });
+        if (w) {
+          t.wammo--; if (t.wammo <= 0) t.wpn = null;
+          this.sfx.blip(w.beam ? 900 : 160, w.beam ? 300 : 70, 0.14, w.beam ? 'sawtooth' : 'square', 0.09);
+        } else if (guided) { t.missiles--; this.sfx.blip(220, 520, 0.18, 'sawtooth', 0.1); }
+        else this.sfx.shoot();
+        if (this.mode === 'net') this.net.send({ t: 'f', x: b.x, y: b.y, dx: b.dx, dy: b.dy, h: b.h, g: guided ? 1 : 0, w: w ? t.wpn : 0, bn: b.bounce });
+      }
+    }
+
+    // AoE explosion for dynamite: crater the ground and damage nearby enemy tanks
+    // (each peer applies damage only to its own tank). #5
+    _blast(b, w) {
+      const tx = Math.floor(b.x), ty = Math.floor(b.y);
+      if (this.mode === 'local' || b.owner === this.myIdx) this._terraform(tx, ty, w.terra || 2, true);
+      for (let i = 0; i < 20; i++) this._spark(b.x, b.y, b.h, i % 2 ? '#ffb020' : w.col);
+      this.sfx.thunk();
+      for (const t of this.tanks) {
+        if (!t.alive || t.i === b.owner) continue;
+        if (Math.hypot(t.x - b.x, t.y - b.y) <= w.aoe) {
+          const mine = this.mode === 'local' || t.i === this.myIdx;
+          if (mine) this._damageMe(t, w.dmg);
+        }
       }
     }
 
@@ -586,9 +633,19 @@
       if (!ob) return;
       this.map.obst[ty * this.map.N + tx] = null;
       const h = mapH(this.map, tx, ty);
-      const col = ob.k === 'tree' ? '#3f9b3f' : '#e0a437';
-      for (let i = 0; i < 14; i++) this._spark(tx + 0.5, ty + 0.5, h + 0.5, col);
+      const col = ob.k === 'tree' ? '#3f9b3f' : ob.k === 'barrel' ? '#b5852f' : '#e0a437';
+      const n = ob.k === 'barrel' ? 26 : 14;
+      for (let i = 0; i < n; i++) this._spark(tx + 0.5, ty + 0.5, h + 0.5, (ob.k === 'barrel' && i % 3 === 0) ? '#ffb020' : col);
       this.sfx.thunk();
+      if (ob.k === 'barrel') {                       // barrels detonate: crater + splash damage
+        if (broadcast) this._terraform(tx, ty, 2, true);
+        for (const t of this.tanks) {
+          if (t.alive && Math.hypot(t.x - (tx + 0.5), t.y - (ty + 0.5)) <= 1.6) {
+            const mine = this.mode === 'local' || t.i === this.myIdx;
+            if (mine) this._damageMe(t, 1);
+          }
+        }
+      }
       if (broadcast && this.mode === 'net') this.net.send({ t: 'ob', x: tx, y: ty });
     }
 
@@ -626,10 +683,10 @@
       this.sfx.boom();
     }
 
-    _damageMe(t) {
+    _damageMe(t, dmg = 1) {
       if (t.inv > 0 || !t.alive) return;
       if (t.shield > 0) { this.sfx.thunk(); return; }
-      t.hp--;
+      t.hp -= dmg;
       this.sfx.thunk();
       if (t.hp <= 0) {
         t.alive = false;
@@ -651,6 +708,7 @@
       t.a = Math.atan2(this.map.N / 2 - s.y, this.map.N / 2 - s.x);
       t.hp = 5; t.alive = true; t.inv = 2.2;
       t.shield = 0; t.speed = 0; t.rapid = 0; t.missiles = 0;
+      t.wpn = null; t.wammo = 0; t.stun = 0;
     }
 
     _spawnPu() {
@@ -659,7 +717,7 @@
         const y = 1 + Math.floor(Math.random() * (this.map.N - 2));
         if (mapOb(this.map, x, y)) continue;
         if (this.map.spawns.some(s => Math.hypot(x + 0.5 - s.x, y + 0.5 - s.y) < 3)) continue;
-        const pu = { id: this.puId++, x: x + 0.5, y: y + 0.5, k: PU_KINDS[(Math.random() * PU_KINDS.length) | 0] };
+        const pu = { id: this.puId++, x: x + 0.5, y: y + 0.5, k: PU_POOL[(Math.random() * PU_POOL.length) | 0] };
         this.pus.push(pu);
         if (this.mode === 'net') this.net.send({ t: 'pu', id: pu.id, x: pu.x, y: pu.y, k: pu.k });
         return;
@@ -675,7 +733,7 @@
       const localIdxs = this.mode === 'local' ? [0, 1] : [this.myIdx];
       for (const t of this.tanks) {
         t.cool -= dt; t.inv = Math.max(0, t.inv - dt);
-        for (const b of ['shield', 'speed', 'rapid']) if (typeof t[b] === 'number') t[b] = Math.max(0, t[b] - dt);
+        for (const b of ['shield', 'speed', 'rapid', 'stun']) if (typeof t[b] === 'number') t[b] = Math.max(0, t[b] - dt);
         const targetH = mapH(this.map, Math.floor(t.x), Math.floor(t.y));
         t.vh += (targetH - t.vh) * Math.min(1, dt * 10);
         if (localIdxs.includes(t.i)) {
@@ -719,7 +777,8 @@
           if (b.tr <= 0) { b.tr = 0.045; this._spark(b.x, b.y, b.h, '#e8a15a'); }  // smoke trail
         }
         b.x += b.dx * dt; b.y += b.dy * dt;
-        if (!b.guided) b.h -= 0.55 * dt;   // gentle drop so hill-top shots reach the valley
+        const bw = b.k ? WEAPONS[b.k] : null;
+        if (!b.guided && !(bw && bw.flat)) b.h -= 0.55 * dt;   // gentle drop; flat beams fly level
         b.life -= dt;
         let dead = b.life <= 0 || b.x < 0 || b.y < 0 || b.x >= this.map.N || b.y >= this.map.N;
         if (!dead) {
@@ -733,26 +792,39 @@
               else { this._spark(b.x, b.y, b.h, '#c8b98a'); this.sfx.thunk(); }
             } else { this._spark(b.x, b.y, b.h, '#9aa0a6'); }
           } else if (mapH(this.map, tx, ty) > b.h) {
-            dead = true;
             const gh = mapH(this.map, tx, ty);
-            for (let s = 0; s < 5; s++) this._spark(b.x, b.y, gh, '#7cba58');
-            // erode the terrain the shot slams into (owner-authoritative in P2P)
-            if (localIdxs.includes(b.owner)) this._terraform(tx, ty, b.guided ? 2 : 1, true);
+            if (b.bounce > 0) {                                  // medicine ball ricochets off hills
+              b.bounce--;
+              b.x -= b.dx * dt; b.y -= b.dy * dt;
+              if (Math.abs(b.dx) >= Math.abs(b.dy)) b.dx = -b.dx; else b.dy = -b.dy;
+              this._spark(b.x, b.y, gh, bw ? bw.col : '#c34242'); this.sfx.thunk();
+            } else {
+              dead = true;
+              for (let s = 0; s < 5; s++) this._spark(b.x, b.y, gh, '#7cba58');
+              // erode the terrain the shot slams into (owner-authoritative in P2P)
+              if (localIdxs.includes(b.owner)) this._terraform(tx, ty, b.guided ? 2 : (bw && bw.terra || 1), true);
+            }
           }
         }
         if (!dead) {
           for (const t of this.tanks) {
-            if (!t.alive || t.i === b.owner) continue;
+            if (!t.alive || t.i === b.owner || (b.hit && b.hit.includes(t.i))) continue;
             const th = mapH(this.map, Math.floor(t.x), Math.floor(t.y));
             if (Math.hypot(t.x - b.x, t.y - b.y) < 0.45 && b.h > th - 0.2 && b.h < th + 1.2) {
-              dead = true;
-              for (let s = 0; s < 6; s++) this._spark(b.x, b.y, b.h, '#ffd76e');
+              for (let s = 0; s < 6; s++) this._spark(b.x, b.y, b.h, bw ? bw.col : '#ffd76e');
               const mine = this.mode === 'local' || t.i === this.myIdx;
-              if (mine) this._damageMe(t);
-              break;
+              if (mine && !(bw && bw.aoe)) {          // aoe weapons deal their damage in _blast
+                this._damageMe(t, bw ? bw.dmg : 1);
+                if (bw && bw.knock) { const a = Math.atan2(t.y - b.y, t.x - b.x); t.x = Math.max(0.4, Math.min(this.map.N - 0.4, t.x + Math.cos(a) * bw.knock)); t.y = Math.max(0.4, Math.min(this.map.N - 0.4, t.y + Math.sin(a) * bw.knock)); }
+                if (bw && bw.pull) { const src = this.tanks[b.owner]; const a = Math.atan2(src.y - t.y, src.x - t.x); t.x = Math.max(0.4, Math.min(this.map.N - 0.4, t.x + Math.cos(a) * bw.pull)); t.y = Math.max(0.4, Math.min(this.map.N - 0.4, t.y + Math.sin(a) * bw.pull)); }
+                if (bw && bw.stun) t.stun = bw.stun;
+              }
+              if (bw && bw.pierce) { (b.hit || (b.hit = [])).push(t.i); }   // beams pass through
+              else { dead = true; break; }
             }
           }
         }
+        if (dead && bw && bw.aoe) this._blast(b, bw);
         if (dead) this.bullets.splice(i, 1);
       }
 
@@ -767,12 +839,14 @@
         for (const idx of localIdxs) {
           const t = this.tanks[idx];
           if (t.alive && Math.hypot(t.x - p.x, t.y - p.y) < 0.55) {
-            if (p.k === 'speed') t.speed = 8;
-            if (p.k === 'shield') t.shield = 6;
-            if (p.k === 'rapid') t.rapid = 8;
-            if (p.k === 'missile') t.missiles = 3;
+            const w = WEAPONS[p.k];
+            if (w) { t.wpn = p.k; t.wammo = w.ammo; }
+            else if (p.k === 'speed') t.speed = 8;
+            else if (p.k === 'shield') t.shield = 6;
+            else if (p.k === 'rapid') t.rapid = 8;
+            else if (p.k === 'missile') t.missiles = 3;
             this.sfx.pick();
-            this._toast((idx === 0 ? 'Red' : 'Blue') + ' got ' + (p.k === 'speed' ? 'Speed!' : p.k === 'shield' ? 'Shield!' : p.k === 'rapid' ? 'Rapid fire!' : 'Guided Missiles!'));
+            this._toast((idx === 0 ? 'Red' : 'Blue') + ' got ' + (w ? w.label + ' ×' + w.ammo + '!' : p.k === 'speed' ? 'Speed!' : p.k === 'shield' ? 'Shield!' : p.k === 'rapid' ? 'Rapid fire!' : 'Guided Missiles!'));
             this.pus.splice(i, 1);
             if (this.mode === 'net') this.net.send({ t: 'pug', id: p.id });
             break;
@@ -821,6 +895,8 @@
         if (t.shield > 0) buffs.push(['SHIELD', PU_COLOR.shield]);
         if (t.rapid > 0) buffs.push(['RAPID', PU_COLOR.rapid]);
         if (t.missiles > 0) buffs.push(['MISSILE ×' + t.missiles, PU_COLOR.missile]);
+        if (t.wammo > 0 && t.wpn) buffs.push([WEAPONS[t.wpn].label.toUpperCase() + ' ×' + t.wammo, PU_COLOR[t.wpn]]);
+        if (t.stun > 0) buffs.push(['STUNNED', '#37d6e0']);
         if (!t.alive) buffs.push(['REBUILDING…', '#8a7f5c']);
         const bhtml = buffs.map(b => `<span class="buff" style="background:${b[1]}">${b[0]}</span>`).join('');
         const bel = card.querySelector('.buffs');
@@ -1002,6 +1078,24 @@
         ctx.lineWidth = 1.5;
         ctx.strokeRect(px - s * 0.55, py - 20, s * 1.1, 0.001);
         this._gloss(ctx, px + 2, py - 20, 10);
+      } else if (k === 'barrel') {
+        this._shadow(ctx, px, py, 14);
+        const bh = 22, bw2 = 12;
+        const g = ctx.createLinearGradient(px - bw2, 0, px + bw2, 0);
+        g.addColorStop(0, '#7a5325'); g.addColorStop(0.5, '#b5852f'); g.addColorStop(1, '#7a5325');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(px - bw2, py - bh + 4);
+        ctx.quadraticCurveTo(px - bw2 - 3, py - bh / 2, px - bw2, py - 2);
+        ctx.lineTo(px + bw2, py - 2);
+        ctx.quadraticCurveTo(px + bw2 + 3, py - bh / 2, px + bw2, py - bh + 4);
+        ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#5a3d1c'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(px - bw2 - 1, py - bh + 7); ctx.lineTo(px + bw2 + 1, py - bh + 7); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(px - bw2 - 2, py - 6); ctx.lineTo(px + bw2 + 2, py - 6); ctx.stroke();
+        ctx.fillStyle = '#c99a4a';
+        ctx.beginPath(); ctx.ellipse(px, py - bh + 4, bw2, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+        this._gloss(ctx, px - 3, py - bh + 4, 8);
       } else { // rock
         this._shadow(ctx, px, py, 18);
         const grad = ctx.createRadialGradient(px - 6, py - 14, 3, px, py - 8, 22);
@@ -1112,6 +1206,25 @@
         ctx.restore();
         return;
       }
+      const bw = b.k ? WEAPONS[b.k] : null;
+      if (bw) {
+        ctx.save();
+        if (bw.beam) {                          // laser / sniper: a bright streak
+          const ang = Math.atan2((b.dx + b.dy) * 0.5, b.dx - b.dy);
+          ctx.translate(bx, by); ctx.rotate(ang);
+          ctx.strokeStyle = bw.col; ctx.lineWidth = 3; ctx.lineCap = 'round';
+          ctx.shadowColor = bw.col; ctx.shadowBlur = 8;
+          ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(9, 0); ctx.stroke();
+        } else {                                // heavy projectile: a chunky ball
+          const r = bw.big ? 8 : 5.5;
+          const g = ctx.createRadialGradient(bx - r * 0.3, by - r * 0.3, 1, bx, by, r);
+          g.addColorStop(0, '#ffffff'); g.addColorStop(0.5, bw.col); g.addColorStop(1, 'rgba(0,0,0,0.33)');
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.restore();
+        return;
+      }
       const grad = ctx.createRadialGradient(bx - 1.5, by - 1.5, 0.5, bx, by, 6);
       grad.addColorStop(0, '#fff3c4');
       grad.addColorStop(1, b.owner === 0 ? '#e8632f' : '#3a7bd5');
@@ -1147,6 +1260,10 @@
         ctx.moveTo(px, cy - 6); ctx.lineTo(px + 3.6, cy + 3); ctx.lineTo(px - 3.6, cy + 3);
         ctx.closePath(); ctx.fill();
         ctx.beginPath(); ctx.moveTo(px, cy + 3); ctx.lineTo(px, cy + 6.5); ctx.stroke();
+      } else if (WEAPONS[p.k]) {      // weapon pack: a four-point star
+        ctx.beginPath();
+        for (let s = 0; s < 8; s++) { const rr = s % 2 ? 3 : 7.5; const a = s * Math.PI / 4 - Math.PI / 2; const fx = px + Math.cos(a) * rr, fy = cy + Math.sin(a) * rr; s ? ctx.lineTo(fx, fy) : ctx.moveTo(fx, fy); }
+        ctx.closePath(); ctx.fill();
       } else {                        // rapid: three dots
         for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.arc(px + i * 5.5, cy, 2.2, 0, Math.PI * 2); ctx.fill(); }
       }
