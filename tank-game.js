@@ -256,6 +256,8 @@
   .dot{width:14px;height:14px;border-radius:50%;flex-shrink:0}
   .pname{font-size:15px;font-weight:900;color:#2c4022}
   .score{margin-left:auto;font-size:19px;font-weight:900;color:#2c4022}
+  .hprow{display:flex;align-items:center;gap:6px}
+  .hplabel{font-size:9px;font-weight:900;letter-spacing:.4px;color:#8a7f5c}
   .hpbar{display:flex;gap:3px}
   .hp{width:24px;height:9px;border-radius:4px;background:#d8d2bd}
   .hp.f0{background:#e84c3d}.hp.f1{background:#3a7bd5}
@@ -276,12 +278,12 @@
 <div class="hud">
   <div class="pcard" id="pc0">
     <div class="prow"><span class="dot" style="background:#e84c3d"></span><span class="pname">Red</span><span class="score">0</span></div>
-    <div class="hpbar"></div><div class="buffs"></div>
+    <div class="hprow"><span class="hplabel">HP</span><div class="hpbar" aria-label="Health"></div></div><div class="buffs"></div>
   </div>
   <div class="mid" id="mid">first to ${'${WIN}'}</div>
   <div class="pcard" id="pc1">
     <div class="prow"><span class="dot" style="background:#3a7bd5"></span><span class="pname">Blue</span><span class="score">0</span></div>
-    <div class="hpbar"></div><div class="buffs"></div>
+    <div class="hprow"><span class="hplabel">HP</span><div class="hpbar" aria-label="Health"></div></div><div class="buffs"></div>
   </div>
 </div>
 <div class="hint" id="hint"></div>
